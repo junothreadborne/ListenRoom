@@ -119,6 +119,17 @@ public class SessionService
         await _db.SaveChangesAsync();
     }
 
+    public async Task MarkParticipantLeftAsync(string sessionId, string connectionId)
+    {
+        var participant = await _db.Participants
+            .FirstOrDefaultAsync(p => p.SessionId == sessionId && p.Id == connectionId);
+        if (participant != null)
+        {
+            participant.LeftAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+    }
+
     public async Task MarkSessionsInterruptedAsync()
     {
         var activeSessions = await _db.Sessions

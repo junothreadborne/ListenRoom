@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ListenRoom — Hub Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+        h1 { color: #64b5f6; margin-bottom: 16px; }
+        h2 { color: #81c784; margin: 16px 0 8px; font-size: 14px; }
+        .panel { background: #16213e; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+        label { display: inline-block; width: 100px; }
+        input[type="text"], input[type="number"] { background: #0f3460; border: 1px solid #555; color: #fff; padding: 4px 8px; border-radius: 3px; width: 200px; }
+        button { background: #e94560; color: #fff; border: none; padding: 6px 14px; border-radius: 3px; cursor: pointer; margin: 2px; }
+        button:hover { background: #c73e54; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        button.green { background: #4caf50; }
+        button.green:hover { background: #388e3c; }
+        button.blue { background: #2196f3; }
+        button.blue:hover { background: #1976d2; }
+        #log { background: #0a0a1a; border: 1px solid #333; border-radius: 6px; padding: 10px; height: 400px; overflow-y: auto; font-size: 12px; line-height: 1.6; }
+        .log-in { color: #64b5f6; }
+        .log-out { color: #81c784; }
+        .log-err { color: #e57373; }
+        .log-info { color: #ffb74d; }
+        #status { padding: 4px 8px; border-radius: 3px; font-weight: bold; display: inline-block; margin-left: 10px; }
+        .connected { background: #2e7d32; }
+        .disconnected { background: #c62828; }
+        .controls { display: flex; flex-wrap: wrap; gap: 4px; }
+    </style>
+</head>
+<body>
+    <h1>ListenRoom Hub Test <span id="status" class="disconnected">Disconnected</span></h1>
+
+    <div class="panel">
+        <h2>Connection</h2>
+        <div style="margin-bottom:8px">
+            <label>Session ID:</label>
+            <input type="text" id="sessionId" value="" placeholder="room-xxxx">
+        </div>
+        <div style="margin-bottom:8px">
+            <label>Display Name:</label>
+            <input type="text" id="displayName" value="" placeholder="Your name">
+        </div>
+        <button class="green" id="btnJoin" onclick="joinSession()">Join Session</button>
+        <button id="btnLeave" onclick="leaveSession()" disabled>Leave Session</button>
+    </div>
+
+    <div class="panel">
+        <h2>Playback (Token Holder Only)</h2>
+        <div style="margin-bottom:8px">
+            <label>Position:</label>
+            <input type="number" id="playPos" value="0" step="0.1">
+            <button class="blue" onclick="updatePlayback(true)" id="btnPlay" disabled>Play</button>
+            <button class="blue" onclick="updatePlayback(false)" id="btnPause" disabled>Pause</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Token Control</h2>
+        <div style="margin-bottom:8px">
+            <label>Pass To:</label>
+            <input type="text" id="passToId" placeholder="connectionId">
+            <button class="blue" onclick="passToken()" id="btnPass" disabled>Pass Token</button>
+        </div>
+        <button onclick="reclaimToken()" id="btnReclaim" disabled>Reclaim Token (Host)</button>
+    </div>
+
+    <div class="panel">
+        <h2>Scratchpad</h2>
+        <div style="margin-bottom:8px">
+            <input type="text" id="scratchContent" placeholder="Type notes..." style="width:400px">
+            <button class="blue" onclick="updateScratchpad()" id="btnScratch" disabled>Send</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Recording</h2>
+        <div class="controls">
+            <button class="green" onclick="recordingReady()" id="btnRecReady" disabled>Ready</button>
+            <button class="green" onclick="recordingStarted()" id="btnRecStart" disabled>Started</button>
+            <button onclick="recordingStopped()" id="btnRecStop" disabled>Stopped</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Seek Request (Non-Token-Holder)</h2>
+        <div style="margin-bottom:8px">
+            <label>Position (s):</label>
+            <input type="number" id="seekPos" value="0" step="0.1">
+            <button class="blue" onclick="requestSeek()" id="btnSeek" disabled>Request Seek</button>
+        </div>
+    </div>
+
+    <h2>Event Log</h2>
+    <div id="log"></div>
+
+    <script>
+        let connection = null;
+
+        function log(msg, cls = 'log-info') {
+            const el = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            el.innerHTML += `<div class="${cls}">[${time}] ${msg}</div>`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        function setButtons(joined) {
+            document.getElementById('btnJoin').disabled = joined;
+            document.getElementById('btnLeave').disabled = !joined;
+            document.getElementById('btnPlay').disabled = !joined;
+            document.getElementById('btnPause').disabled = !joined;
+            document.getElementById('btnPass').disabled = !joined;
+            document.getElementById('btnReclaim').disabled = !joined;
+            document.getElementById('btnScratch').disabled = !joined;
+            document.getElementById('btnRecReady').disabled = !joined;
+            document.getElementById('btnRecStart').disabled = !joined;
+            document.getElementById('btnRecStop').disabled = !joined;
+            document.getElementById('btnSeek').disabled = !joined;
+        }
+
+        async function joinSession() {
+            const sessionId = document.getElementById('sessionId').value;
+            const displayName = document.getElementById('displayName').value;
+            if (!sessionId || !displayName) { log('Session ID and name required', 'log-err'); return; }
+
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl('/hubs/session')
+                .withAutomaticReconnect()
+                .configureLogging(signalR.LogLevel.Information)
+                .build();
+
+            // Register all server→client handlers
+            connection.on('SessionJoined', data => {
+                log(`<b>SessionJoined</b>: ${JSON.stringify(data, null, 0)}`, 'log-in');
+            });
+            connection.on('ParticipantJoined', data => {
+                log(`<b>ParticipantJoined</b>: ${data.displayName} (${data.connectionId})`, 'log-in');
+            });
+            connection.on('ParticipantLeft', data => {
+                log(`<b>ParticipantLeft</b>: ${data.displayName} (${data.connectionId})`, 'log-in');
+            });
+            connection.on('PlaybackSync', data => {
+                log(`<b>PlaybackSync</b>: pos=${data.position} playing=${data.playing} sentAt=${data.sentAt}`, 'log-in');
+                document.getElementById('playPos').value = data.position;
+            });
+            connection.on('TokenUpdated', data => {
+                log(`<b>TokenUpdated</b>: holder=${data.holderName} (${data.holderConnectionId})`, 'log-in');
+            });
+            connection.on('ScratchpadUpdated', data => {
+                log(`<b>ScratchpadUpdated</b>: "${data.content}" from ${data.authorConnectionId}`, 'log-in');
+            });
+            connection.on('ParticipantTyping', data => {
+                log(`<b>ParticipantTyping</b>: ${data.displayName}`, 'log-in');
+            });
+            connection.on('RecordingStateChanged', data => {
+                log(`<b>RecordingStateChanged</b>: ${data.connectionId} recording=${data.isRecording}`, 'log-in');
+            });
+            connection.on('SeekRequested', data => {
+                log(`<b>SeekRequested</b>: ${data.fromName} wants to seek to ${data.positionSeconds}s`, 'log-in');
+            });
+            connection.on('SessionEnded', () => {
+                log(`<b>SessionEnded</b>`, 'log-in');
+            });
+
+            connection.onclose(() => {
+                log('Connection closed', 'log-err');
+                document.getElementById('status').className = 'disconnected';
+                document.getElementById('status').textContent = 'Disconnected';
+                setButtons(false);
+            });
+
+            try {
+                await connection.start();
+                document.getElementById('status').className = 'connected';
+                document.getElementById('status').textContent = 'Connected: ' + connection.connectionId;
+                log(`Connected with ID: ${connection.connectionId}`, 'log-out');
+
+                await connection.invoke('JoinSession', sessionId, displayName);
+                log(`Joined session ${sessionId} as ${displayName}`, 'log-out');
+                setButtons(true);
+            } catch (err) {
+                log(`Error: ${err}`, 'log-err');
+            }
+        }
+
+        async function leaveSession() {
+            try {
+                await connection.invoke('LeaveSession');
+                log('Left session', 'log-out');
+                await connection.stop();
+                setButtons(false);
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function updatePlayback(playing) {
+            try {
+                const pos = parseFloat(document.getElementById('playPos').value);
+                await connection.invoke('UpdatePlayback', pos, playing);
+                log(`UpdatePlayback: pos=${pos} playing=${playing}`, 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function passToken() {
+            try {
+                const toId = document.getElementById('passToId').value;
+                await connection.invoke('PassToken', toId);
+                log(`PassToken to ${toId}`, 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function reclaimToken() {
+            try {
+                await connection.invoke('ReclaimToken');
+                log('ReclaimToken', 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function updateScratchpad() {
+            try {
+                const content = document.getElementById('scratchContent').value;
+                await connection.invoke('UpdateScratchpad', content);
+                log(`UpdateScratchpad: "${content}"`, 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function recordingReady() {
+            try {
+                await connection.invoke('RecordingReady');
+                log('RecordingReady', 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function recordingStarted() {
+            try {
+                await connection.invoke('RecordingStarted');
+                log('RecordingStarted', 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function recordingStopped() {
+            try {
+                await connection.invoke('RecordingStopped');
+                log('RecordingStopped', 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+
+        async function requestSeek() {
+            try {
+                const pos = parseFloat(document.getElementById('seekPos').value);
+                await connection.invoke('RequestTimestampSeek', pos);
+                log(`RequestTimestampSeek: ${pos}s`, 'log-out');
+            } catch (err) { log(`Error: ${err}`, 'log-err'); }
+        }
+    </script>
+</body>
+</html>

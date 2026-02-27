@@ -3,6 +3,7 @@ using Hangfire.Storage.SQLite;
 using Microsoft.EntityFrameworkCore;
 using ListenRoom.Web.Data;
 using ListenRoom.Web.Models;
+using ListenRoom.Web.Hubs;
 using ListenRoom.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,9 +18,13 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 // Services
 builder.Services.AddScoped<SessionService>();
+builder.Services.AddSingleton<SessionStateService>();
 
 // Controllers
 builder.Services.AddControllers();
+
+// SignalR
+builder.Services.AddSignalR();
 
 // Hangfire
 builder.Services.AddHangfire(config =>
@@ -52,6 +57,7 @@ using (var scope = app.Services.CreateScope())
 app.UseStaticFiles();
 app.UseHangfireDashboard("/hangfire");
 app.MapControllers();
+app.MapHub<SessionHub>("/hubs/session");
 
 // Fallback: serve index.html for the root
 app.MapFallbackToFile("index.html");
